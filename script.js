@@ -1,15 +1,21 @@
-// WebGL-backed video renderer
+// WebGL-backed video renderer - Single rectangle system
 const video = document.getElementById('video');
 const canvas = document.getElementById('glcanvas');
 
-// State for scale and position (these will be used as uniforms)
-let videoScale = 1.0;
-let videoX = 0;
-let videoY = 0;
+// State for canvas transforms (single rectangle - the canvas itself)
+let canvasScale = 1.0; // scales the 1280px base width (0.2 to 2.0)
+let canvasX = 0; // offset from centered position
+let canvasY = 0;
+let videoMirrored = false; // horizontal flip
 
 // --- persistence -----------------
 const SETTINGS_KEY = 'avp:settings:v1';
-const DEFAULT_SETTINGS = { scale: 1.0, x: 0, y: 0 };
+const DEFAULT_SETTINGS = {
+    canvasScale: 1.0,
+    canvasX: 0,
+    canvasY: 0,
+    mirrored: false
+};
 let _saveTimer = null;
 
 function loadSettings() {
@@ -17,7 +23,11 @@ function loadSettings() {
         const raw = localStorage.getItem(SETTINGS_KEY);
         if (!raw) return { ...DEFAULT_SETTINGS };
         const data = JSON.parse(raw);
-        if (typeof data.scale !== 'number' || typeof data.x !== 'number' || typeof data.y !== 'number') {
+        // Validate all required fields
+        if (typeof data.canvasScale !== 'number' || 
+            typeof data.canvasX !== 'number' || 
+            typeof data.canvasY !== 'number' || 
+            typeof data.mirrored !== 'boolean') {
             return { ...DEFAULT_SETTINGS };
         }
         return { ...DEFAULT_SETTINGS, ...data };
@@ -31,7 +41,12 @@ function saveSettingsDebounced(delay = 300) {
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
         try {
-            const payload = { scale: videoScale, x: videoX, y: videoY };
+            const payload = {
+                canvasScale,
+                canvasX,
+                canvasY,
+                mirrored: videoMirrored
+            };
             localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
         } catch (err) {
             console.warn('Could not save settings:', err);
@@ -40,18 +55,30 @@ function saveSettingsDebounced(delay = 300) {
     }, delay);
 }
 
+// Apply canvas transforms via CSS
+function updateCanvasTransform() {
+    canvas.style.transform = `translate(calc(-50% + ${canvasX}px), calc(-50% + ${canvasY}px)) scale(${canvasScale})`;
+}
+
 // Load on start
 (() => {
     const s = loadSettings();
-    videoScale = s.scale;
-    videoX = s.x;
-    videoY = s.y;
+    canvasScale = s.canvasScale;
+    canvasX = s.canvasX;
+    canvasY = s.canvasY;
+    videoMirrored = s.mirrored;
+    updateCanvasTransform();
 })();
 
 // Save on unload as a last-resort synchronous write
 window.addEventListener('beforeunload', () => {
     try {
-        const payload = { scale: videoScale, x: videoX, y: videoY };
+        const payload = {
+            canvasScale,
+            canvasX,
+            canvasY,
+            mirrored: videoMirrored
+        };
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
     } catch (e) { /* ignore */ }
 });
@@ -94,30 +121,21 @@ void main() {
 }
 `;
 
+// Simplified shader - just handles aspect ratio and mirroring
 const fsSource = `#version 100
 precision mediump float;
 varying vec2 v_uv;
 uniform sampler2D u_texture;
-uniform vec2 u_offset; // in pixels relative to canvas center
-uniform float u_scale;
 uniform vec2 u_videoSize;
-uniform vec2 u_canvasSize;
+uniform float u_mirror;
 
 void main() {
-    // convert v_uv (0..1) to centered pixel coords for video
-    vec2 centered = (v_uv - 0.5) * u_videoSize;
-    // apply scale
-    centered /= u_scale;
-    // apply offset (note: offset is in pixels, where positive x moves right)
-    centered -= u_offset;
-    // convert back to uv
-    vec2 uv = (centered / u_videoSize) + 0.5;
+    // apply mirror
+    vec2 uv = v_uv;
+    uv.x = u_mirror > 0.5 ? 1.0 - uv.x : uv.x;
+    
     // sample
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-    } else {
-        gl_FragColor = texture2D(u_texture, uv);
-    }
+    gl_FragColor = texture2D(u_texture, uv);
 }
 `;
 
@@ -160,22 +178,25 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
 const u_texture = gl.getUniformLocation(program, 'u_texture');
-const u_offset = gl.getUniformLocation(program, 'u_offset');
-const u_scale = gl.getUniformLocation(program, 'u_scale');
 const u_videoSize = gl.getUniformLocation(program, 'u_videoSize');
-const u_canvasSize = gl.getUniformLocation(program, 'u_canvasSize');
+const u_mirror = gl.getUniformLocation(program, 'u_mirror');
 
 gl.uniform1i(u_texture, 0);
 
 function resizeCanvasToDisplaySize() {
     const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-    const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    const displayWidth = Math.max(1, Math.floor(canvas.clientWidth));
+    const displayHeight = Math.max(1, Math.floor(canvas.clientHeight));
+    const width = Math.max(1, Math.floor(displayWidth * dpr));
+    const height = Math.max(1, Math.floor(displayHeight * dpr));
+    
     if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
         gl.viewport(0, 0, width, height);
     }
+    
+    return { width: displayWidth, height: displayHeight };
 }
 
 function updateTextureFromVideo() {
@@ -189,18 +210,12 @@ function updateTextureFromVideo() {
 
 function render() {
     resizeCanvasToDisplaySize();
-
-    // update texture
     updateTextureFromVideo();
-
-    // set uniforms
-    const canvasSize = [canvas.width, canvas.height];
+    
+    // Pass video dimensions for aspect ratio handling
     const videoSize = [video.videoWidth || canvas.width, video.videoHeight || canvas.height];
-    gl.uniform2fv(u_canvasSize, canvasSize);
     gl.uniform2fv(u_videoSize, videoSize);
-    // offset: convert from pixels to the space used in shader (we kept offsets in pixels)
-    gl.uniform2fv(u_offset, [videoX, videoY]);
-    gl.uniform1f(u_scale, videoScale);
+    gl.uniform1f(u_mirror, videoMirrored ? 1.0 : 0.0);
 
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -209,15 +224,20 @@ function render() {
     requestAnimationFrame(render);
 }
 
-// Start rendering loop once the video has some data
+// Start rendering loop and show the start frame (seek to 0 and pause)
 function startIfReady() {
-    if (video.readyState >= 2) {
-        video.play().catch(() => { });
+    const showStartFrame = () => {
+        try { video.currentTime = 0; } catch (e) { /* ignore */ }
+        // keep paused so the start frame is visible until user plays
+        try { video.pause(); } catch (e) { /* ignore */ }
         requestAnimationFrame(render);
+    };
+
+    if (video.readyState >= 2) {
+        showStartFrame();
     } else {
         video.addEventListener('loadeddata', () => {
-            video.play().catch(() => { });
-            requestAnimationFrame(render);
+            showStartFrame();
         }, { once: true });
     }
 }
@@ -256,37 +276,44 @@ async function toggleFullscreen() {
     }
 }
 
-// Keyboard handling preserved from previous implementation
+// Keyboard handling - single rectangle system
 let _lastSpaceToggle = 0; // timestamp in ms
 const SPACE_DEBOUNCE_MS = 250;
-
+ 
 window.addEventListener('keydown', (e) => {
     // ignore when typing in inputs or using content editable
     const tag = e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
 
     let handled = false;
+    
+    // Canvas window controls (no Alt key needed anymore - it's the only control)
+    const moveStep = e.shiftKey ? 50 : 10;
     if (e.code === 'NumpadAdd') {
-        videoScale += e.shiftKey ? 0.10 : 0.01;
-        if (videoScale > 10) videoScale = 10;
+        canvasScale += e.shiftKey ? 0.1 : 0.05;
+        if (canvasScale > 2) canvasScale = 2;
+        updateCanvasTransform();
         handled = true;
     } else if (e.code === 'NumpadSubtract') {
-        videoScale -= e.shiftKey ? 0.10 : 0.01;
-        if (videoScale < 0.1) videoScale = 0.1;
+        canvasScale -= e.shiftKey ? 0.1 : 0.05;
+        if (canvasScale < 0.2) canvasScale = 0.2;
+        updateCanvasTransform();
         handled = true;
-    }
-    const moveStep = e.shiftKey ? 10 : 1;
-    if (e.code === 'Numpad8') {
-        videoY -= moveStep;
+    } else if (e.code === 'Numpad8') {
+        canvasY -= moveStep;
+        updateCanvasTransform();
         handled = true;
     } else if (e.code === 'Numpad2') {
-        videoY += moveStep;
+        canvasY += moveStep;
+        updateCanvasTransform();
         handled = true;
     } else if (e.code === 'Numpad4') {
-        videoX -= moveStep;
+        canvasX -= moveStep;
+        updateCanvasTransform();
         handled = true;
     } else if (e.code === 'Numpad6') {
-        videoX += moveStep;
+        canvasX += moveStep;
+        updateCanvasTransform();
         handled = true;
     }
 
@@ -295,7 +322,8 @@ window.addEventListener('keydown', (e) => {
         saveSettingsDebounced();
         return;
     }
-
+    
+    // Other controls
     if (e.code === 'Space') {
         const now = Date.now();
         if (now - _lastSpaceToggle < SPACE_DEBOUNCE_MS) return;
@@ -308,7 +336,9 @@ window.addEventListener('keydown', (e) => {
     } else if (e.key === 'Home') {
         e.preventDefault();
         goToHeadAndPlay();
+    } else if (e.code === 'KeyM') {
+        e.preventDefault();
+        videoMirrored = !videoMirrored;
+        saveSettingsDebounced();
     }
 });
-
-// Note: no object URL cleanup required for static file
