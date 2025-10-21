@@ -20,14 +20,28 @@ video#video {
 /* 16:9 canvas for WebGL rendering, starts centered */
 canvas#glcanvas {
     position: absolute;
-    width: 1280px; /* default size, will be scaled */
+    width: 1280px;
+    /* default size, will be scaled */
     aspect-ratio: 16/9;
     background: black;
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
     z-index: 1;
-    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+/* Overlay canvas for corner pin indicators - matches glcanvas exactly */
+canvas#overlay {
+    position: absolute;
+    width: 1280px;
+    aspect-ratio: 16/9;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 2;
+    pointer-events: none;
+    /* don't block interaction with the video */
 }
 
 /* Hide native focus outlines for aesthetic; keep accessibility via keyboard control behavior */
