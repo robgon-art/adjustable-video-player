@@ -1,0 +1,30 @@
+/* Minimal reset */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0
+}
+
+html,
+body {
+    height: 100%;
+    background: #000 !important;
+}
+
+/* Make the video fill the viewport while preserving aspect ratio */
+video#video {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: black;
+    will-change: transform;
+    /* Allow transform for scale/position */
+    z-index: 1;
+}
+
+/* Hide native focus outlines for aesthetic; keep accessibility via keyboard control behavior */
+video:focus {
+    outline: none
+}
