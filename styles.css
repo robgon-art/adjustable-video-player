@@ -12,15 +12,18 @@ body {
 }
 
 /* Make the video fill the viewport while preserving aspect ratio */
+/* The original <video> element is hidden; we keep it as the texture source for WebGL */
 video#video {
+    display: none;
+}
+
+/* Fullscreen canvas for WebGL rendering */
+canvas#glcanvas {
     position: fixed;
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: contain;
     background: black;
-    will-change: transform;
-    /* Allow transform for scale/position */
     z-index: 1;
 }
 

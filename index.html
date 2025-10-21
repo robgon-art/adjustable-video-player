@@ -4,12 +4,16 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Simple Video Player</title>
+    <title>Adjustable Video Player</title>
     <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
-    <video id="video" controls src="Firefly_Halloween_2025_v1.mp4" preload="metadata"></video>
+    <!-- video is kept as the source for the WebGL texture; native controls are removed -->
+    <video id="video" src="Firefly_Halloween_2025_v1.mp4" preload="metadata" playsinline></video>
+
+    <!-- canvas used for WebGL rendering of the video -->
+    <canvas id="glcanvas" aria-label="Video canvas"></canvas>
 
     <script src="script.js"></script>
 </body>
